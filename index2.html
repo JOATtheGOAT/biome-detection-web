@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Biome Detector</title>
+    <script src="https://unpkg.com/@turf/turf@6/turf.min.js"></script> <!-- Load Turf.js -->
+</head>
+<body>
+    <h1>Biome Detector</h1>
+    <button onclick="startBiomeDetection()">Find My Biome</button>
+
+    <script>
+        function startBiomeDetection() {
+            fetch("biomes.geojson") // Make sure this file is accessible
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error("Failed to load GeoJSON file.");
+                    }
+                    return response.json();
+                })
+                .then(geojsonData => {
+                    alert("GeoJSON loaded successfully!");
+                    checkUserBiome(geojsonData);
+                })
+                .catch(error => {
+                    alert("Error loading GeoJSON: " + error.message);
+                });
+        }
+
+        function getUserLocation(callback) {
+            if ("geolocation" in navigator) {
+                navigator.geolocation.getCurrentPosition(
+                    (position) => {
+                        const userCoords = [position.coords.longitude, position.coords.latitude];
+                        alert("Your coordinates are: " + userCoords.join(", "));
+                        callback(userCoords);
+                    },
+                    (error) => {
+                        alert("Error getting location: " + error.message + ". Make sure location services are enabled.");
+                    },
+                    { enableHighAccuracy: true }
+                );
+            } else {
+                alert("Geolocation is not supported in this browser.");
+            }
+        }
+
+        function checkUserBiome(geojsonData) {
+            getUserLocation((userCoords) => {
+                const userPoint = turf.point(userCoords);
+                let foundBiome = "Unknown Biome";
+
+                for (const feature of geojsonData.features) {
+                    if (turf.booleanPointInPolygon(userPoint, feature.geometry)) {
+                        foundBiome = feature.properties.name || "Unnamed Biome";
+                        break;
+                    }
+                }
+
+                alert("You are in: " + foundBiome);
+            });
+        }
+    </script>
+</body>
+</html>

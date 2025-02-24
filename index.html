@@ -1,0 +1,457 @@
+<!DOCTYPE html>
+<html>
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>3D Pokedex</title>
+        <script data-wrecked-no-grab="true">
+
+// wrecked-no-grab=true
+
+(function() {
+
+let fileMap = null;
+let currentPath = null;
+let scripts = [];
+let sourceMaps = {};
+let transpiledScripts = {};
+
+const showErrorsOnScreen = true;
+const createSourceMaps = false;
+const applySourceMaps = false;
+
+const dataURIRegex = /data:([a-zA-Z0-9!#$&.+-^_]+\/[a-zA-Z0-9!#$&.+-^_]+)?(;[a-zA-Z0-9!#$&.+-^_]+)*;base64,([A-Za-z0-9+/]+={0,2})/g;
+const importRegex = /^\s*(?:(import(?:\s+\*\s+as\s+\w+|\s+\w+(?:\s*,\s*\{[^}]*\})?|\s*\{[^}]*\})\s+from\s+)["']([^"']+)["'];?)(?:\s*)(?!\/\/\s*wrecked-no-grab=true)\n/mg;
+const schemeRegex = /^[a-z][a-z\d+\-.]*:/;
+const sourceMapRegex = /\/\/# sourceMappingURL=([^\n]*)(\n|$)/;
+const lineAndColnoRegex = /:(\d+):(\d+)/;
+const pathSep = /(?<!\\)\//;
+const extTypes = {
+    '.js': 'javascript',
+    '.ts': 'typescript',
+    '.jsx': 'javascript-jsx',
+    '.tsx': 'typescript-jsx',
+};
+const vlqAlphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+const isStandalone = window.opener === null;
+const cdns = Object.entries({
+    '^react-dom': 'esm.sh',
+    '^react': 'esm.sh',
+    '.*': 'unpkg.com',
+}).sort(([a], [b]) => b.length - a.length);
+
+function applySourceMap(line, map, path) {
+    const after = line.slice(line.indexOf(path) + path.length + 1);
+    const match = lineAndColnoRegex.exec(after);
+    if (match) {
+        const [lineno, colno] = match.slice(1);
+        let sections = map.mappings.split(';');
+        sections = sections[lineno - 2].split(',');
+        sections = sections.map((section) => {
+            let newSection = [];
+            let value = 0;
+            let sign = 1;
+            let contCount = 0;
+            for (const x of section.split('').map((y) => vlqAlphabet.indexOf(y))) {
+                if (contCount == 0) {
+                    value = (x & 30) >> 1;
+                } else {
+                    value += (x & 31) << (5*(contCount - 1) + (contCount == 0 ? 0 : 4));
+                }
+                if (contCount == 0 && (x & 1)) sign = -sign;
+                if ((x & 32) == 32) {
+                    contCount += 1;
+                } else {
+                    newSection.push(value * sign);
+                    value = 0;
+                    sign = 1;
+                    contCount = 0;
+                }
+            }
+            return newSection;
+        });
+        let col = 0;
+        for (const section of sections) {
+            const newCol = section[0];
+
+        }
+        const newLineno = lineno;
+        const newColno = colno;
+        line = line.replace(match[0], ':' + newLineno + ':' + newColno);
+    }
+    return line;
+}
+
+function handleError(error, applyMaps=applySourceMaps) {
+    if (error.wreckedNoGrab) return;
+    let msg = error.stack ? error.stack : error.message;
+    msg = msg.split('\n');
+    for (let i = 0; i < msg.length; i++) {
+        let line = msg[i];
+        let path = null;
+        const matches = line.matchAll(dataURIRegex);
+        for (const match of matches) {
+            const code = atob(match[3]);
+            if (code.startsWith('//wrecked-name=')) {
+                const file = code.slice('//wrecked-name='.length, code.indexOf('\n'));
+                if (path === null) path = '/' + file;
+                line = line.replaceAll(match[0], file);
+            }
+        }
+        if (applyMaps && path !== null && path in sourceMaps) {
+            const after = line.slice(line.indexOf(path) + path.length + 1);
+            const match = lineAndColnoRegex.exec(after);
+            try {
+                applySourceMap(line, sourceMaps[path], path);
+            } catch (error) {
+                handleError(error, map=false);
+            }
+        }
+        msg[i] = line;
+    }
+    msg = msg.join('\n').replace(dataURIRegex, '<data uri>');
+    if (showErrorsOnScreen) {
+        if (document.readyState == 'complete') {
+            document.body.innerHTML = `<pre style="font-size:14px;color:red;padding-left:15px;"></pre>`;
+            document.querySelector('body pre').innerText = msg;
+        } else {
+            alert(msg);
+        }
+        let lastInterval = setInterval(()=>{},0);
+        for (let i = 1; i <= lastInterval; i++) clearInterval(i);
+        document.body.style.overflowY = 'auto';
+        document.querySelectorAll('*').forEach((x) => x.style.userSelect = 'initial');
+    }
+    const out = new (error.constructor)(error.message);
+    out.stack = error.stack;
+    out.wreckedNoGrab = true;
+    throw out;
+}
+
+window.onerror = (a, b, c, d, error) => handleError(error);
+
+window.onunhandledrejection = function(error) {
+    if (error.reason instanceof Error) {
+        handleError(error.reason);
+    } else {
+        handleError({constructor: Error, message: error.reason, stack: ''});
+    }
+}
+
+function getExtType(path) {
+    for (const [ext, type] of Object.entries(extTypes)) {
+        if (path.endsWith(ext)) return type;
+    }
+    return 'no-type';
+}
+
+function simplifyPath(...paths) {
+    let out = [];
+    if (!paths[0].startsWith('/')) paths = [currentPath].concat(paths);
+    for (const path of paths) {
+        for (const item of path.split(pathSep)) {
+            if (item == '' || item == '.') {
+                continue;
+            } else if (item == '..') {
+                out.pop();
+            } else {
+                out.push(item);
+            }
+        }
+    }
+    return '/' + out.filter((x) => x !== '').join('/');
+}
+
+function getNewImport(oldImport) {
+    return (/^\.?\.?\//.test(oldImport) ? '_wrecked' : '.') + simplifyPath(oldImport);
+}
+
+const oldFetch = fetch;
+
+window.fetch = async function(url) {
+    if (schemeRegex.test(url) || !(window.location.protocol == 'file:')) {
+        const resp = await oldFetch(url);
+        if (!resp.headers.has('Content-Type')) {
+            resp.headers.set('Content-Type', getExtType(url));
+        }
+        return resp;
+    } else {
+        url = simplifyPath(url);
+        if (!(url in fileMap)) {
+            return new Response('', {status: 404, statusText: 'Not Found'});
+        }
+        const file = fileMap[simplifyPath(url)];
+        const code = typeof file == 'string' ? file : await file.text();
+        const headers = {'Content-Type': getExtType(url)};
+        return new Response(code, {status: 200, statusText: 'OK', headers: headers});
+    }
+}
+
+function injectScript({type, data, src, onload}) {
+    const elt = document.createElement('script');
+    elt.setAttribute('data-wrecked-no-grab', 'true');
+    if (type) elt.type = type;
+    if (data) elt.textContent = data;
+    if (src) elt.src = src;
+    if (onload) elt.addEventListener('load', onload);
+    document.body.appendChild(elt);
+}
+
+async function loadScriptData(script) {
+    if (script.data == undefined) {
+        if (!script.src) return false;
+        const resp = await fetch(script.src);
+        if (resp.ok) {
+            if (!script.type) script.type = resp.headers.get('Content-Type');
+            script.data = await resp.text();
+        } else {
+            throw new TypeError(`Unable to access script '${script.src}' due to ${resp.status} ${resp.statusText}`);
+        }
+    }
+    return script;
+}
+
+let tsLoaded = false;
+
+async function transpileTs(code, options = {}, path = '<no path provided>') {
+    if (path in transpiledScripts) return transpiledScripts[path];
+    code = code.replaceAll('\n\n', '\n//\n');
+    if (isStandalone) {
+        if (!tsLoaded) await new Promise((resolve, reject) => {
+            injectScript({
+                src: 'https://unpkg.com/typescript',
+                onload: () => {
+                    tsLoaded = true;
+                    resolve(true);
+                }
+            });
+        });
+        code = ts.transpile(code, options);
+        code = code.replaceAll('\n//wrecked-blank-line\n', '\n');
+        transpiledScripts[path] = code;
+        return code;
+    } else {
+        return new Promise((resolve, reject) => {
+            function callback(event) {
+                window.removeEventListener('message', callback);
+                const data = event.data;
+                if (data.mode == 'response' && data.type == 'transpile_ts') {
+                    if (data.request.path != path) return;
+                    if (data.data instanceof Error) {
+                        reject(data.data);
+                    } else {
+                        let code = data.data;
+                        code = code.replaceAll('\n//wrecked-blank-line\n', '\n');
+                        if (applySourceMaps) {
+                            const match = sourceMapRegex.exec(code);
+                            if (match) {
+                                const match2 = dataURIRegex.exec(match[1]);
+                                if (match2) {
+                                    let map;
+                                    try {
+                                        sourceMaps[path] = JSON.parse(atob(match2[3]));
+                                    } catch (err) {}
+                                }
+                            }
+                        }
+                        if (path != '<no path provided>') {
+                            transpiledScripts[path] = code;
+                        }
+                        resolve(code);
+                    }
+                }
+            }
+            window.addEventListener('message', callback);
+            window.opener.postMessage({
+                mode: 'request',
+                type: 'transpile_ts',
+                data: {code: code, options: options, path: path},
+            }, '*');
+        });
+    }
+}
+
+async function patchScript(script) {
+    if (script.patched) return script;
+    let type = script.type;
+    let code = script.data;
+    const src = script.src;
+    if (type == 'typescript' || type == 'javascript-jsx' || type == 'typescript-jsx') {
+        code = await transpileTs(code, {
+            target: 'es6',
+            module: 'es6',
+            jsx: type.includes('jsx') ? 'react' : undefined,
+            inlineSourceMap: createSourceMaps,
+        }, simplifyPath(src));
+        type = 'javascript';
+    }
+    if (type == 'javascript') {
+        let matches = code.matchAll(importRegex);
+        for (const match of matches) {
+            let specifier = match[2];
+            if (!(/^\.?\.?\//.test(specifier))) {
+                let cdn = cdns.filter(([x]) => specifier.match(x) !== null)[0][1];
+                specifier = 'https://' + cdn + '/' + specifier + '?module';
+            } else {
+                specifier = '_wrecked' + simplifyPath(specifier);
+            }
+            code = code.replaceAll(match[0], match[1] + '"' + specifier + '"; // wrecked-no-grab=true\n');
+        }
+    } else if (type == 'css') {
+        code = `(() => {
+            const elt = document.createElement('style');
+            elt.innerText = \`${code.replaceAll('`', '\\`').replaceAll('$', '\\$')}\`;
+            document.head.appendChild(elt);
+        });`;
+    } else if (!(type == 'importmap' || type == 'python')) {
+        throw new TypeError(`unrecognized script type '${type}'`);
+    }
+    return {type: type, data: code, src: src, patched: true};
+}
+
+let pyodide = null;
+
+async function runPython(code) {
+    if (pyodide === null) {
+        injectScript({
+            src: 'https://cdn.jsdelivr.net/pyodide/v0.24.1/full/pyodide.js',
+            onload: async () => {
+                pyodide = await loadPyodide();
+                pyodide.runPython(code);
+            },
+        });
+    } else {
+        pyodide.runPython(code);
+    }
+}
+
+async function runScript(script) {
+    script = await patchScript(await loadScriptData(script));
+    const {type, data, src} = script;
+    if (type == 'importmap') {
+        injectScript({type: 'importmap', data: data});
+    } else if (type == 'python') {
+        runPython(data);
+    } else if (src) {
+        injectScript({type: 'module', data: `import * as _ from '${getNewImport(src)}'`});
+    } else {
+        injectScript({type: 'module', data: data});
+    }
+}
+
+async function initialRun() {
+    const scriptsCopy = scripts.slice();
+    let map = {};
+    while (scripts.length > 0) {
+        const script = await loadScriptData(scripts.pop());
+        if (!script) continue;
+        script.data.matchAll(importRegex).forEach((match) => {
+            const specifier = match[2];
+            if ((/^\.?\.?\//.test(specifier))) {
+                scripts.push({src: specifier, type: getExtType(specifier), patched: false});
+            }
+        });
+        if (script.src) {
+            const specifier = getNewImport(script.src);
+            const patched = await patchScript(await loadScriptData(script));
+            const base64data = btoa(`//wrecked-name=${simplifyPath(script.src).slice(1)}\n` + patched.data);
+            map[specifier] = 'data:text/javascript;base64,' + base64data;
+        }
+    }
+    await runScript({type: 'importmap', data: JSON.stringify({imports: map})});
+    for (const script of scriptsCopy) {
+        await runScript(script);
+    }
+}
+
+function interceptScript(script) {
+    if (script.tagName && script.tagName == 'SCRIPT' && !script.getAttribute('data-wrecked-no-grab')) {
+        if ((/^\s*\/\/[^\n]*wrecked-no-grab=true/.test(script.textContent))) return;
+        console.log(script);
+        let type = script.getAttribute('type');
+        if (type !== null && type.startsWith('wrecked/')) type = type.slice(8);
+        script.setAttribute('type', 'text/plain');
+        script.parentNode.removeChild(script);
+        script.setAttribute('data-wrecked-no-grab', 'true');
+        const src = script.getAttribute('src');
+        if (src && src !== '<anonymous code>') {
+            scripts.push({type: type, src: src, patched: false});
+        } else {
+            if (isStandalone && script.getAttribute('data-wrecked-name')) {
+                fileMap[simplifyPath(script.getAttribute('data-wrecked-name'))] = script.textContent;
+            } else {
+                scripts.push({type: type, data: script.textContent, patched: false});
+            }
+        }
+    }
+}
+
+document.querySelectorAll('script').forEach(interceptScript);
+
+new MutationObserver(function(mutations) {
+    for (const mutation of mutations) {
+        for (const node of mutation.addedNodes) {
+            interceptScript(node);
+        }
+    }
+}).observe(document.documentElement, {childList: true, subtree: true});
+
+if (!isStandalone) {
+    window.addEventListener('message', async function(event) {
+        const {mode, type, request, data} = event.data;
+        if (mode == 'response') {
+            if (type == 'filemap') {
+                fileMap = data;
+                if (currentPath !== null) initialRun();
+            } else if (type == 'currentpath') {
+                currentPath = data;
+                if (fileMap !== null) initialRun();
+            }
+        }
+    });
+    window.opener.postMessage({
+        mode: 'request',
+        type: 'filemap',
+    }, '*');
+    window.opener.postMessage({
+        mode: 'request',
+        type: 'currentpath',
+    }, '*');
+} else {
+    currentPath = '/';
+    fileMap = {};
+    window.addEventListener('load', initialRun);
+}
+
+window.require = async function(path) {
+    const script = await fileMap[simplifyPath(path)].text();
+    const out = {require: require, module: {exports: {}}};
+    Function(`'use strict'; ${script}`).bind(out)();
+    return out.module.exports;
+}
+
+})();
+                        
+        </script>
+        <style>
+
+* {
+    user-select: none;
+    box-sizing: border-box;
+}
+
+html, body {
+    height: 100%;
+    width: 100%;
+    margin: 0;
+    overflow: hidden;
+    font-family: Consolas, 'Courier New', Courier, monospace;
+    color: #ffffff;
+}
+
+        </style>
+    </head>
+    <body>
+        <script type="wrecked/javascript" src="main.js"></script>
+    </body>
+</html>
